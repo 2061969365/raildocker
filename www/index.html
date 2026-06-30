@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🛸 智能节点订阅管理面板</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background-color: #0f172a; color: #e2e8f0; margin: 0; padding: 40px 20px; display: flex; justify-content: center; }
+        .container { background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3); max-width: 650px; width: 100%; }
+        h1 { font-size: 24px; color: #38bdf8; margin: 0 0 10px 0; }
+        p { color: #94a3b8; font-size: 14px; margin-bottom: 25px; }
+        .card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 18px; margin-bottom: 20px; }
+        .label { font-weight: 600; font-size: 14px; color: #38bdf8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;}
+        .value { font-family: monospace; font-size: 13px; word-break: break-all; background: #1e293b; padding: 12px; border-radius: 6px; border: 1px solid #475569; color: #cbd5e1; max-height: 120px; overflow-y: auto;}
+        .input-group { display: flex; gap: 10px; margin-bottom: 12px; }
+        input { flex: 1; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 10px; color: white; font-family: monospace; font-size: 14px; }
+        button { background-color: #0284c7; color: white; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s; }
+        button:hover { background-color: #0369a1; }
+        .footer { text-align: center; font-size: 12px; color: #64748b; margin-top: 25px; border-top: 1px solid #334155; padding-top: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛸 节点高级配置与订阅生成面板</h1>
+        <p>当前服务完全隐藏于 Cloudflare Tunnel 后面，Railway 实例处于 100% 封闭的纯内网状态。</p>
+
+        <div class="card">
+            <div class="label">⚡ Cloudflare 接入点物理加速 (本地优选 IP)</div>
+            <div class="input-group">
+                <input type="text" id="cfIpInput" placeholder="输入测速得出的优选IP，例如: 104.16.88.9">
+                <button onclick="applyCustomIp()">应用并重组节点</button>
+            </div>
+            <span style="font-size: 12px; color: #64748b;">留空则默认将你的隧道域名作为连接地址。</span>
+        </div>
+
+        <div class="card">
+            <div class="label">VLESS 节点链接 (WS 模式)</div>
+            <div class="value" id="nodeLink">生成中...</div>
+            <button onclick="copyText('nodeLink')">📋 复制节点链接</button>
+        </div>
+
+        <div class="card">
+            <div class="label">Base64 通用订阅内容</div>
+            <div class="value" id="subContent">生成中...</div>
+            <button onclick="copyText('subContent')">📋 复制订阅内容</button>
+        </div>
+
+        <div class="footer">
+            Powered by Xray-core & Cloudflare Tunnel (QUIC Mode) on Railway
+        </div>
+    </div>
+
+    <script>
+        const uuid = "UUID_PLACEHOLDER";
+        const wsPath = "/ws-node";
+        const currentHost = window.location.host;
+
+        function generateLinks(connectAddress) {
+            const vlessLink = `vless://${uuid}@${connectAddress}:443?encryption=none&security=tls&type=ws&host=${currentHost}&sni=${currentHost}&path=${encodeURIComponent(wsPath)}#Railway-Tunnel`;
+
+            document.getElementById('nodeLink').innerText = vlessLink;
+            document.getElementById('subContent').innerText = btoa(vlessLink);
+        }
+
+        generateLinks(currentHost);
+
+        function applyCustomIp() {
+            const inputVal = document.getElementById('cfIpInput').value.trim();
+            if (inputVal) {
+                generateLinks(inputVal);
+                alert(`已成功切换连接点至: ${inputVal}\n请点击下方按钮重新复制更新后的配置！`);
+            } else {
+                generateLinks(currentHost);
+                alert('已恢复为默认隧道域名。');
+            }
+        }
+
+        function copyText(elementId) {
+            const text = document.getElementById(elementId).innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('已成功复制到剪贴板！');
+            }).catch(err => {
+                alert('复制失败，请手动选中文本复制。');
+            });
+        }
+    </script>
+</body>
+</html>
