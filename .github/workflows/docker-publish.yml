@@ -29,7 +29,8 @@ jobs:
 
       - name: 🔤 Downcase repository name
         run: |
-          echo "IMAGE_NAME=ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]' >> $GITHUB_ENV
+          LOW_NAME=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=${LOW_NAME}" >> $GITHUB_ENV
 
       - name: 📦 Build and push Docker image
         uses: docker/build-push-action@v5

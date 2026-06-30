@@ -1,0 +1,259 @@
+Plaintext
+├── Dockerfile
+├── config.json
+├── start.sh
+└── www/
+    └── index.html
+🛠️ 第一部分：全套核心生产代码
+1. Dockerfile（极简 Alpine 环境）
+Dockerfile
+# 从官方高版本镜像中提取可执行二进制文件
+FROM teddysun/xray:latest AS xray-source
+FROM cloudflare/cloudflared:latest AS cf-source
+
+# 最终运行的极简环境
+FROM alpine:latest
+# 安装 bash 和网络核心组件
+RUN apk add --no-cache bash curl
+
+# 复制核心组件到运行目录
+COPY --from=xray-source /usr/bin/xray /usr/bin/xray
+COPY --from=cf-source /usr/local/bin/cloudflared /usr/local/bin/cloudflared
+
+WORKDIR /app
+COPY . .
+
+# 赋予启动脚本执行权限
+RUN chmod +x /app/start.sh
+ENTRYPOINT ["/app/start.sh"]
+2. config.json（带有安全审计与防火墙的 Xray 配置）
+加入了版权保护规则，自动阻断 BitTorrent 等协议，防止因版权投诉导致 Railway 账号被封。
+
+JSON
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "port": 8080,
+      "listen": "127.0.0.1",
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "UUID_PLACEHOLDER",
+            "level": 0
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/ws-node"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "direct"
+    },
+    {
+      "protocol": "blackhole",
+      "tag": "block"
+    }
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+      {
+        "type": "field",
+        "outboundTag": "block",
+        "protocol": [
+          "bittorrent"
+        ]
+      }
+    ]
+  }
+}
+3. start.sh（全自动进程守护与安全启动脚本）
+Bash
+#!/bin/bash
+
+# 1. 动态安全初始化 UUID
+if [ -z "$UUID" ]; then
+  # 如果用户未填变量，调用 Xray 动态生成一个绝对随机的安全密钥，防止硬编码泄露
+  export UUID=$(/usr/bin/xray uuid)
+  echo "⚠️ 未检测到自定义 UUID 变量，系统已自动生成随机安全密钥: $UUID"
+else
+  echo "🔑 当前节点正在使用自定义 UUID: $UUID"
+fi
+
+# 动态将真实的 UUID 注入到配置文件和前端 index.html 页面中
+sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/config.json
+sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/www/index.html
+
+# 2. 启动 Alpine 自带的 Busybox 网页服务器（监听内网 8081 端口，运行内存几乎为 0）
+busybox httpd -p 127.0.0.1:8081 -h /app/www &
+echo "🌐 轻量静态网页后台已在本地 8081 端口拉起"
+
+# 3. 启动 Xray 核心监控（监听内网 8080 端口）
+/usr/bin/xray -config /app/config.json &
+echo "🚀 Xray 核心组件已在本地 8080 端口拉起"
+
+# 4. 验证并强制以高抗丢包的 QUIC (UDP) 协议拉起 Cloudflare Tunnel
+if [ -z "$TUNNEL_TOKEN" ]; then
+  echo "❌ 【错误】未检测到 TUNNEL_TOKEN 环境变量，Cloudflare Tunnel 无法建立！"
+  exit 1
+fi
+
+echo "🚇 正在通过 QUIC (UDP) 协议向 Cloudflare 边缘网络建立加密大桥..."
+/usr/local/bin/cloudflared tunnel --protocol quic --no-autoupdate run --token "$TUNNEL_TOKEN" &
+
+# 5. 生产级双进程互锁监控：任何一方意外断流，容器立刻主动关闭，从而触发 Railway 自动自愈重启
+while true; do
+  sleep 10
+  pidof xray > /dev/null
+  XRAY_STATUS=$?
+  pidof cloudflared > /dev/null
+  CF_STATUS=$?
+  
+  if [ $XRAY_STATUS -ne 0 ] || [ $CF_STATUS -ne 0 ]; then
+    echo "🚨 【警告】检测到内部核心进程异常崩溃！正在终止容器以触发 Railway 自动拉起新实例..."
+    exit 1
+  fi
+done
+4. www/index.html（自适应优选 IP 生成面板）
+HTML
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🛸 智能节点订阅管理面板</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background-color: #0f172a; color: #e2e8f0; margin: 0; padding: 40px 20px; display: flex; justify-content: center; }
+        .container { background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3); max-width: 650px; width: 100%; }
+        h1 { font-size: 24px; color: #38bdf8; margin: 0 0 10px 0; }
+        p { color: #94a3b8; font-size: 14px; margin-bottom: 25px; }
+        .card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 18px; margin-bottom: 20px; }
+        .label { font-weight: 600; font-size: 14px; color: #38bdf8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;}
+        .value { font-family: monospace; font-size: 13px; word-break: break-all; background: #1e293b; padding: 12px; border-radius: 6px; border: 1px solid #475569; color: #cbd5e1; max-height: 120px; overflow-y: auto;}
+        .input-group { display: flex; gap: 10px; margin-bottom: 12px; }
+        input { flex: 1; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 10px; color: white; font-family: monospace; font-size: 14px; }
+        button { background-color: #0284c7; color: white; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s; }
+        button:hover { background-color: #0369a1; }
+        .footer { text-align: center; font-size: 12px; color: #64748b; margin-top: 25px; border-top: 1px solid #334155; padding-top: 15px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛸 节点高级配置与订阅生成面板</h1>
+        <p>当前服务完全隐藏于 Cloudflare Tunnel 后面，Railway 实例处于 100% 封闭的纯内网状态。</p>
+        
+        <div class="card">
+            <div class="label">⚡ Cloudflare 接入点物理加速 (本地优选 IP)</div>
+            <div class="input-group">
+                <input type="text" id="cfIpInput" placeholder="输入测速得出的优选IP，例如: 104.16.88.9">
+                <button onclick="applyCustomIp()">应用并重组节点</button>
+            </div>
+            <span style="font-size: 12px; color: #64748b;">留空则默认将你的隧道域名作为连接地址。</span>
+        </div>
+
+        <div class="card">
+            <div class="label">VLESS 节点链接 (WS 模式)</div>
+            <div class="value" id="nodeLink">生成中...</div>
+            <button onclick="copyText('nodeLink')">📋 复制节点链接</button>
+        </div>
+
+        <div class="card">
+            <div class="label">Base64 通用订阅内容</div>
+            <div class="value" id="subContent">生成中...</div>
+            <button onclick="copyText('subContent')">📋 复制订阅内容</button>
+        </div>
+
+        <div class="footer">
+            Powered by Xray-core & Cloudflare Tunnel (QUIC Mode) on Railway
+        </div>
+    </div>
+
+    <script>
+        const uuid = "UUID_PLACEHOLDER"; 
+        const wsPath = "/ws-node";
+        const currentHost = window.location.host; // 获取当前你访问网页后台时使用的隧道子域名
+        
+        function generateLinks(connectAddress) {
+            // 高阶逻辑：无论 Address 换成什么优选 IP，host 和 sni 必须绝对锁死为你的真实隧道子域名！
+            const vlessLink = `vless://${uuid}@${connectAddress}:443?encryption=none&security=tls&type=ws&host=${currentHost}&sni=${currentHost}&path=${encodeURIComponent(wsPath)}#Railway-Tunnel`;
+            
+            document.getElementById('nodeLink').innerText = vlessLink;
+            document.getElementById('subContent').innerText = btoa(vlessLink);
+        }
+
+        // 初始化：默认直接连接当前子域名
+        generateLinks(currentHost);
+
+        function applyCustomIp() {
+            const inputVal = document.getElementById('cfIpInput').value.trim();
+            if (inputVal) {
+                generateLinks(inputVal);
+                alert(`已成功切换连接点至: ${inputVal}\n请点击下方按钮重新复制更新后的配置！`);
+            } else {
+                generateLinks(currentHost);
+                alert('已恢复为默认隧道域名。');
+            }
+        }
+
+        function copyText(elementId) {
+            const text = document.getElementById(elementId).innerText;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('已成功复制到剪贴板！');
+            }).catch(err => {
+                alert('复制失败，请手动选中文本复制。');
+            });
+        }
+    </script>
+</body>
+</html>
+⚙️ 第二部分：Railway 环境变量填写说明
+代码部署到 Railway 后，请在项目的 Variables 标签页中添加以下变量：
+
+变量名 (Variable Name)	是否必填	示例值	详细作用与获取方式说明
+TUNNEL_TOKEN	🔥 必须填写	eyJhIjoiMDU0NzY... (一长串极长的加密字符)	
+隧道连接核心凭证。 用于告诉 Railway 的容器应该往你 Cloudflare 账户里的哪条安全通道上建立数据连接。
+
+
+
+获取方法： 登录 Cloudflare Zero Trust 后台 -> Networks -> Tunnels -> 点击 Create a Tunnel 成功创建后，在页面上能直接看到一串以 cloudflared tunnel run --token 开头的命令，其后面的那长串乱码就是 Token。
+
+UUID	💡 建议填写	7f7f892a-8c3b-4ff2-a1b4-bc8b3459cba6	
+VLESS 节点的连接密码（用户 ID）。
+
+
+
+填写建议： 推荐自定义填写。如果你故意留空不填，系统在启动时也会自动调用 Xray 内置工具在内存中随机生成一个最高安全级别的 UUID，并打印在 Railway 的运行日志（Logs）里，前端网页也会自动获取，安全系数拉满。
+
+⚠️ Railway 部署特别提醒：
+在 Railway 服务的 Settings -> Networking 区域，不要点击 "Generate Domain"。整个项目完全不依赖 Railway 的公网端口和公网域名。
+
+🚇 第三部分：Cloudflare 后台路径分流（Path Routing）复习
+因为我们要在一个子域名（如 node.yourdomain.com）下同时塞进“网页后台”和“Xray 节点流量”，请确保你在 Cloudflare Zero Trust 的该隧道 Public Hostname 面板里添加了以下两条并存的路由规则：
+
+第一条（网页规则）：
+
+Subdomain: node | Domain: yourdomain.com | Path: 留空
+
+Type: HTTP | URL: localhost:8081 (导向网页服务器)
+
+第二条（节点分流规则）：
+
+Subdomain: node | Domain: yourdomain.com | Path: ws-node (核心过滤词)
+
+Type: HTTP | URL: localhost:8080 (导向 Xray)
+
+设置项： 展开 No TLS / Additional application settings -> HTTP2 -> 将 WebSocket 勾选为 Enabled（开启状态）。
+
+当你一切就绪，只需要在浏览器中打开 https://node.yourdomain.com，属于你的高级节点管理面板就正式投入使用了！
