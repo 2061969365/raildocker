@@ -1,34 +1,6 @@
-Plaintext
-├── Dockerfile
-├── config.json
-├── start.sh
-└── www/
-    └── index.html
-🛠️ 第一部分：全套核心生产代码
-1. Dockerfile（极简 Alpine 环境）
-Dockerfile
-# 从官方高版本镜像中提取可执行二进制文件
-FROM teddysun/xray:latest AS xray-source
-FROM cloudflare/cloudflared:latest AS cf-source
+请用这套精简优化后的全套代码覆盖你的仓库：
 
-# 最终运行的极简环境
-FROM alpine:latest
-# 安装 bash 和网络核心组件
-RUN apk add --no-cache bash curl
-
-# 复制核心组件到运行目录
-COPY --from=xray-source /usr/bin/xray /usr/bin/xray
-COPY --from=cf-source /usr/local/bin/cloudflared /usr/local/bin/cloudflared
-
-WORKDIR /app
-COPY . .
-
-# 赋予启动脚本执行权限
-RUN chmod +x /app/start.sh
-ENTRYPOINT ["/app/start.sh"]
-2. config.json（带有安全审计与防火墙的 Xray 配置）
-加入了版权保护规则，自动阻断 BitTorrent 等协议，防止因版权投诉导致 Railway 账号被封。
-
+1. config.json（精简版：纯净单端口 VLESS）
 JSON
 {
   "log": {
@@ -37,7 +9,7 @@ JSON
   "inbounds": [
     {
       "port": 8080,
-      "listen": "127.0.0.1",
+      "listen": "0.0.0.0",
       "protocol": "vless",
       "settings": {
         "clients": [
@@ -79,181 +51,250 @@ JSON
     ]
   }
 }
-3. start.sh（全自动进程守护与安全启动脚本）
+2. start.sh（精简版：双端口雷达监控 + 状态采集）
+删除了 8082 端口，只留下网页（8081）和 VLESS（8080）的互锁监控。
+
 Bash
 #!/bin/bash
 
-# 1. 动态安全初始化 UUID
+# 1. 动态安全初始化密钥
 if [ -z "$UUID" ]; then
-  # 如果用户未填变量，调用 Xray 动态生成一个绝对随机的安全密钥，防止硬编码泄露
   export UUID=$(/usr/bin/xray uuid)
-  echo "⚠️ 未检测到自定义 UUID 变量，系统已自动生成随机安全密钥: $UUID"
+  echo "⚠️ 未检测到自定义 UUID，系统已自动生成随机密钥: $UUID"
 else
-  echo "🔑 当前节点正在使用自定义 UUID: $UUID"
+  echo "🔑 当前节点正在使用自定义密钥: $UUID"
 fi
 
-# 动态将真实的 UUID 注入到配置文件和前端 index.html 页面中
+# 动态注入密钥到内核配置文件和前端页面
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/config.json
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/www/index.html
 
-# 2. 启动 Alpine 自带的 Busybox 网页服务器（监听内网 8081 端口，运行内存几乎为 0）
-busybox httpd -p 127.0.0.1:8081 -h /app/www &
-echo "🌐 轻量静态网页后台已在本地 8081 端口拉起"
+# 2. 启动 Alpine 增强网页服务器（监听 8081 端口）
+httpd -p 8081 -h /app/www &
+echo "🌐 静态网页后台已在本地 8081 端口拉起"
 
-# 3. 启动 Xray 核心监控（监听内网 8080 端口）
+# 3. 启动 Xray 核心组件（监听 8080 端口）
 /usr/bin/xray -config /app/config.json &
 echo "🚀 Xray 核心组件已在本地 8080 端口拉起"
 
-# 4. 验证并强制以高抗丢包的 QUIC (UDP) 协议拉起 Cloudflare Tunnel
+# 4. 验证并运行 Cloudflare Tunnel 隧道
 if [ -z "$TUNNEL_TOKEN" ]; then
-  echo "❌ 【错误】未检测到 TUNNEL_TOKEN 环境变量，Cloudflare Tunnel 无法建立！"
+  echo "❌ 【错误】未检测到 TUNNEL_TOKEN 环境变量，隧道无法建立！"
   exit 1
 fi
 
 echo "🚇 正在通过 QUIC (UDP) 协议向 Cloudflare 边缘网络建立加密大桥..."
 /usr/local/bin/cloudflared tunnel --protocol quic --no-autoupdate run --token "$TUNNEL_TOKEN" &
 
-# 5. 生产级双进程互锁监控：任何一方意外断流，容器立刻主动关闭，从而触发 Railway 自动自愈重启
+# 5. 核心监控、系统硬核状态指标采集循环
 while true; do
   sleep 10
-  pidof xray > /dev/null
-  XRAY_STATUS=$?
-  pidof cloudflared > /dev/null
-  CF_STATUS=$?
   
-  if [ $XRAY_STATUS -ne 0 ] || [ $CF_STATUS -ne 0 ]; then
-    echo "🚨 【警告】检测到内部核心进程异常崩溃！正在终止容器以触发 Railway 自动拉起新实例..."
+  # --- 📊 仪表盘数据采集逻辑 ---
+  # 采集 CPU 占用率
+  IDLE=$(top -b -n 1 | grep "CPU:" | awk '{for(i=1;i<=NF;i++) if($i ~ /idle/) print $(i-1)}' | tr -d '%')
+  CPU_PCT=$((100 - IDLE))
+  
+  # 采集内存占用率
+  MEM_TOTAL=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+  MEM_FREE=$(awk '/MemFree/ {print $2}' /proc/meminfo)
+  MEM_BUFFERS=$(awk '/Buffers/ {print $2}' /proc/meminfo)
+  MEM_CACHED=$(awk '/Cached/ {print $2}' /proc/meminfo)
+  MEM_USED=$((MEM_TOTAL - MEM_FREE - MEM_BUFFERS - MEM_CACHED))
+  MEM_PCT=$((MEM_USED * 100 / MEM_TOTAL))
+  
+  # 采集累计消耗流量 (排除本地回环 lo)
+  RX_BYTES=$(awk '!/lo|face/ {rx+=$2} END {print rx}' /proc/net/dev)
+  TX_BYTES=$(awk '!/lo|face/ {tx+=$10} END {print tx}' /proc/net/dev)
+  
+  # 生成轻量级实时状态 JSON 供前端读取
+  echo "{\"cpu\":$CPU_PCT,\"mem\":$MEM_PCT,\"rx\":$RX_BYTES,\"tx\":$TX_BYTES}" > /app/www/status.json
+  
+  # --- 📡 双端口雷达监控逻辑 ---
+  netstat -tln | grep -q :8080
+  VLESS_PORT=$?
+  netstat -tln | grep -q :8081
+  HTTP_PORT=$?
+  pidof cloudflared > /dev/null
+  CF_PROCESS=$?
+  
+  if [ $VLESS_PORT -ne 0 ] || [ $HTTP_PORT -ne 0 ] || [ $CF_PROCESS -ne 0 ]; then
+    echo "🚨 【断流警报】检测到硬断流！(VLESS:$VLESS_PORT, 网页:$HTTP_PORT, 隧道:$CF_PROCESS)"
     exit 1
   fi
 done
-4. www/index.html（自适应优选 IP 生成面板）
+3. www/index.html（精简完全体：404伪装 + 仪表盘 + 自动优选IP）
+移除了 Trojan 的排版，UI 变得更加紧凑洗练。暗号依旧锁定为你指定的固定单词 ?mirror。
+
 HTML
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🛸 智能节点订阅管理面板</title>
-    <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background-color: #0f172a; color: #e2e8f0; margin: 0; padding: 40px 20px; display: flex; justify-content: center; }
-        .container { background: #1e293b; padding: 30px; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3); max-width: 650px; width: 100%; }
-        h1 { font-size: 24px; color: #38bdf8; margin: 0 0 10px 0; }
-        p { color: #94a3b8; font-size: 14px; margin-bottom: 25px; }
-        .card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 18px; margin-bottom: 20px; }
-        .label { font-weight: 600; font-size: 14px; color: #38bdf8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;}
-        .value { font-family: monospace; font-size: 13px; word-break: break-all; background: #1e293b; padding: 12px; border-radius: 6px; border: 1px solid #475569; color: #cbd5e1; max-height: 120px; overflow-y: auto;}
-        .input-group { display: flex; gap: 10px; margin-bottom: 12px; }
-        input { flex: 1; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 10px; color: white; font-family: monospace; font-size: 14px; }
-        button { background-color: #0284c7; color: white; border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: background 0.2s; }
-        button:hover { background-color: #0369a1; }
-        .footer { text-align: center; font-size: 12px; color: #64748b; margin-top: 25px; border-top: 1px solid #334155; padding-top: 15px; }
+    <title id="pageTitle">404 Not Found</title>
+    <style id="mainStyle">
+        body { background-color: #ffffff; color: #000000; font-family: sans-serif; text-align: center; padding-top: 150px; margin: 0; }
+        h1 { font-size: 40px; font-weight: normal; margin: 0 0 10px 0; border-bottom: 1px solid #cccccc; display: inline-block; padding-bottom: 10px; width: 600px; max-width: 90%; }
+        p { font-size: 14px; color: #333333; margin: 10px 0 0 0; }
+        .hidden-panel { display: none; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>🛸 节点高级配置与订阅生成面板</h1>
-        <p>当前服务完全隐藏于 Cloudflare Tunnel 后面，Railway 实例处于 100% 封闭的纯内网状态。</p>
-        
-        <div class="card">
-            <div class="label">⚡ Cloudflare 接入点物理加速 (本地优选 IP)</div>
-            <div class="input-group">
-                <input type="text" id="cfIpInput" placeholder="输入测速得出的优选IP，例如: 104.16.88.9">
-                <button onclick="applyCustomIp()">应用并重组节点</button>
+
+    <div id="fakePage">
+        <h1>404 Not Found</h1>
+        <p>nginx/1.26.1</p>
+    </div>
+
+    <div id="realPage" class="hidden-panel">
+        <div class="container">
+            <div class="header-area">
+                <h1>🛸 边缘计算网关综合控制面板</h1>
+                <span class="badge">安全防扫描激活</span>
             </div>
-            <span style="font-size: 12px; color: #64748b;">留空则默认将你的隧道域名作为连接地址。</span>
-        </div>
 
-        <div class="card">
-            <div class="label">VLESS 节点链接 (WS 模式)</div>
-            <div class="value" id="nodeLink">生成中...</div>
-            <button onclick="copyText('nodeLink')">📋 复制节点链接</button>
-        </div>
+            <div class="grid-2">
+                <div class="card">
+                    <div class="label">📊 容器计算资源监控</div>
+                    <div class="dash-item">CPU 使用率: <span id="cpuVal">0</span>%</div>
+                    <div class="progress-bar"><div id="cpuBar" class="progress-inner" style="width: 0%"></div></div>
+                    <div class="dash-item" style="margin-top:10px;">内存使用率: <span id="memVal">0</span>%</div>
+                    <div class="progress-bar"><div id="memBar" class="progress-inner" style="width: 0%"></div></div>
+                </div>
+                <div class="card">
+                    <div class="label">🚀 容器累计流量统计</div>
+                    <div class="dash-item" style="font-size: 15px; margin-top:12px;">📥 下载流量：<strong id="rxVal" style="color:#38bdf8;">0 MB</strong></div>
+                    <div class="dash-item" style="font-size: 15px; margin-top:15px;">📤 上传流量：<strong id="txVal" style="color:#34d399;">0 MB</strong></div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <div class="label">⚡ 全网最新官方优选 IP 推荐 (全自动动态捞取)</div>
+                <div style="font-size:12px; color:#94a3b8; margin-bottom:10px;">点击下方优质物理加速点，可一键自动重组下方的节点链接：</div>
+                <div id="ipPool" style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:15px;">
+                    <span style="font-size:13px; color:#64748b;">正在顺着星际网络打捞新鲜 IP 池...</span>
+                </div>
+                <div class="label" style="font-size:12px; color:#38bdf8;">手动覆盖接入点 IP 或优选域名:</div>
+                <div class="input-group">
+                    <input type="text" id="cfIpInput" placeholder="例如: 104.16.88.9 或 cf.aliyun.com">
+                    <button onclick="applyCustomIp()">强制套用接入点</button>
+                </div>
+            </div>
 
-        <div class="card">
-            <div class="label">Base64 通用订阅内容</div>
-            <div class="value" id="subContent">生成中...</div>
-            <button onclick="copyText('subContent')">📋 复制订阅内容</button>
-        </div>
+            <div class="card">
+                <div class="label" style="color:#38bdf8;">🪐 VLESS 节点通用配置链接</div>
+                <div class="value" id="nodeLink" style="height:50px;">生成中...</div>
+                <button class="btn-copy" onclick="copyText('nodeLink')">📋 一键复制 VLESS 节点链接</button>
+            </div>
 
-        <div class="footer">
-            Powered by Xray-core & Cloudflare Tunnel (QUIC Mode) on Railway
+            <div class="card">
+                <div class="label">📦 Base64 订阅内容</div>
+                <div class="value" id="subContent" style="height:50px;">生成中...</div>
+                <button class="btn-copy" style="background:#475569;" onclick="copyText('subContent')">📋 一键复制通用订阅内容</button>
+            </div>
+
+            <div class="footer">Powered by Xray-core & Cloudflare Tunnel (QUIC Mode)</div>
         </div>
     </div>
 
     <script>
         const uuid = "UUID_PLACEHOLDER"; 
         const wsPath = "/ws-node";
-        const currentHost = window.location.host; // 获取当前你访问网页后台时使用的隧道子域名
-        
-        function generateLinks(connectAddress) {
-            // 高阶逻辑：无论 Address 换成什么优选 IP，host 和 sni 必须绝对锁死为你的真实隧道子域名！
-            const vlessLink = `vless://${uuid}@${connectAddress}:443?encryption=none&security=tls&type=ws&host=${currentHost}&sni=${currentHost}&path=${encodeURIComponent(wsPath)}#Railway-Tunnel`;
+        const currentHost = window.location.host; 
+
+        // 🛡️ 变色龙暗号识别
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('mirror')) {
+            document.getElementById('fakePage').style.display = 'none';
+            document.getElementById('realPage').style.display = 'block';
+            document.getElementById('pageTitle').innerText = '🛸 智能节点订阅管理面板';
             
-            document.getElementById('nodeLink').innerText = vlessLink;
-            document.getElementById('subContent').innerText = btoa(vlessLink);
+            document.getElementById('mainStyle').innerHTML = `
+                body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background-color: #0f172a; color: #e2e8f0; margin: 0; padding: 30px 15px; display: flex; justify-content: center; text-align: left; }
+                .container { background: #1e293b; padding: 25px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4); max-width: 700px; width: 100%; }
+                .header-area { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 15px; margin-bottom: 20px; }
+                h1 { font-size: 20px; color: #38bdf8; margin: 0; border: none; padding: 0; width: auto; }
+                .badge { background: #059669; color: white; font-size: 11px; padding: 4px 8px; border-radius: 99px; font-weight: bold; }
+                .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+                @media(max-width:600px){ .grid-2 { grid-template-columns: 1fr; } }
+                .card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 15px; margin-bottom: 15px; }
+                .label { font-weight: 600; font-size: 13px; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;}
+                .dash-item { font-size: 13px; color: #cbd5e1; }
+                .progress-bar { background: #334155; height: 6px; border-radius: 99px; margin-top: 6px; overflow: hidden; }
+                .progress-inner { background: #38bdf8; height: 100%; transition: width 0.5s; }
+                .value { font-family: monospace; font-size: 11px; word-break: break-all; background: #1e293b; padding: 10px; border-radius: 6px; border: 1px solid #475569; color: #cbd5e1; overflow-y: auto; margin-bottom: 10px;}
+                .input-group { display: flex; gap: 10px; }
+                input { flex: 1; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 8px; color: white; font-family: monospace; font-size: 13px; }
+                button { background-color: #0284c7; color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; }
+                .btn-copy { width: 100%; background: #0284c7; font-size: 12px; font-weight: bold; padding: 7px; border: none; border-radius: 4px; color: white; cursor: pointer;}
+                .ip-tag { background: #1e293b; border: 1px solid #475569; padding: 3px 8px; border-radius: 4px; font-size: 12px; font-family: monospace; color: #38bdf8; cursor: pointer; }
+                .ip-tag:hover { background: #38bdf8; color: #0f172a; }
+                .footer { text-align: center; font-size: 11px; color: #64748b; margin-top: 15px; border-top: 1px solid #334155; padding-top: 12px; }
+            `;
+            
+            generateLinks(currentHost);
+            initDashboard();
+            fetchOptimizedIPs();
         }
 
-        // 初始化：默认直接连接当前子域名
-        generateLinks(currentHost);
+        function generateLinks(connectAddress) {
+            const vlessLink = `vless://${uuid}@${connectAddress}:443?encryption=none&security=tls&type=ws&host=${currentHost}&sni=${currentHost}&path=${encodeURIComponent(wsPath)}#🇸🇬_SG_Premium_VLESS`;
+            document.getElementById('nodeLink').innerText = vlessLink;
+            document.getElementById('subContent').innerText = btoa(unescape(encodeURIComponent(vlessLink)));
+        }
 
         function applyCustomIp() {
             const inputVal = document.getElementById('cfIpInput').value.trim();
-            if (inputVal) {
-                generateLinks(inputVal);
-                alert(`已成功切换连接点至: ${inputVal}\n请点击下方按钮重新复制更新后的配置！`);
-            } else {
-                generateLinks(currentHost);
-                alert('已恢复为默认隧道域名。');
-            }
+            generateLinks(inputVal ? inputVal : currentHost);
+            alert(inputVal ? `已成功套用接入点: ${inputVal}` : '已恢复默认隧道域名解析');
+        }
+
+        function initDashboard() {
+            const updateStats = () => {
+                fetch('/status.json?t=' + Date.now())
+                    .then(res => res.json())
+                    .then(data => {
+                        document.getElementById('cpuVal').innerText = data.cpu;
+                        document.getElementById('cpuBar').style.width = data.cpu + '%';
+                        document.getElementById('memVal').innerText = data.mem;
+                        document.getElementById('memBar').style.width = data.mem + '%';
+                        document.getElementById('rxVal').innerText = (data.rx / 1024 / 1024).toFixed(2) + ' MB';
+                        document.getElementById('txVal').innerText = (data.tx / 1024 / 1024).toFixed(2) + ' MB';
+                    }).catch(() => {});
+            };
+            updateStats();
+            setInterval(updateStats, 10000);
+        }
+
+        function fetchOptimizedIPs() {
+            fetch('https://cdn.jsdelivr.net/gh/Alvin9999/new-pac@master/cloudflarespeedtest/cloudflare.txt')
+                .then(res => res.text())
+                .then(text => {
+                    const lines = text.split('\n').map(s => s.trim()).filter(s => s.length > 0 && !s.includes(':'));
+                    const poolDiv = document.getElementById('ipPool');
+                    poolDiv.innerHTML = ''; 
+                    
+                    lines.slice(0, 6).forEach(ip => {
+                        const span = document.createElement('span');
+                        span.className = 'ip-tag';
+                        span.innerText = ip;
+                        span.onclick = () => {
+                            document.getElementById('cfIpInput').value = ip;
+                            generateLinks(ip);
+                            alert(`✨ 已成功切换到该优选 IP: ${ip}`);
+                        };
+                        poolDiv.appendChild(span);
+                    });
+                }).catch(() => {
+                    document.getElementById('ipPool').innerHTML = '<span style="font-size:12px; color:#ef4444;">公网资源池打捞失败。</span>';
+                });
         }
 
         function copyText(elementId) {
             const text = document.getElementById(elementId).innerText;
-            navigator.clipboard.writeText(text).then(() => {
-                alert('已成功复制到剪贴板！');
-            }).catch(err => {
-                alert('复制失败，请手动选中文本复制。');
-            });
+            navigator.clipboard.writeText(text).then(() => alert('已成功复制到剪贴板！'));
         }
     </script>
 </body>
 </html>
-⚙️ 第二部分：Railway 环境变量填写说明
-代码部署到 Railway 后，请在项目的 Variables 标签页中添加以下变量：
-
-变量名 (Variable Name)	是否必填	示例值	详细作用与获取方式说明
-TUNNEL_TOKEN	🔥 必须填写	eyJhIjoiMDU0NzY... (一长串极长的加密字符)	
-隧道连接核心凭证。 用于告诉 Railway 的容器应该往你 Cloudflare 账户里的哪条安全通道上建立数据连接。
-
-
-
-获取方法： 登录 Cloudflare Zero Trust 后台 -> Networks -> Tunnels -> 点击 Create a Tunnel 成功创建后，在页面上能直接看到一串以 cloudflared tunnel run --token 开头的命令，其后面的那长串乱码就是 Token。
-
-UUID	💡 建议填写	7f7f892a-8c3b-4ff2-a1b4-bc8b3459cba6	
-VLESS 节点的连接密码（用户 ID）。
-
-
-
-填写建议： 推荐自定义填写。如果你故意留空不填，系统在启动时也会自动调用 Xray 内置工具在内存中随机生成一个最高安全级别的 UUID，并打印在 Railway 的运行日志（Logs）里，前端网页也会自动获取，安全系数拉满。
-
-⚠️ Railway 部署特别提醒：
-在 Railway 服务的 Settings -> Networking 区域，不要点击 "Generate Domain"。整个项目完全不依赖 Railway 的公网端口和公网域名。
-
-🚇 第三部分：Cloudflare 后台路径分流（Path Routing）复习
-因为我们要在一个子域名（如 node.yourdomain.com）下同时塞进“网页后台”和“Xray 节点流量”，请确保你在 Cloudflare Zero Trust 的该隧道 Public Hostname 面板里添加了以下两条并存的路由规则：
-
-第一条（网页规则）：
-
-Subdomain: node | Domain: yourdomain.com | Path: 留空
-
-Type: HTTP | URL: localhost:8081 (导向网页服务器)
-
-第二条（节点分流规则）：
-
-Subdomain: node | Domain: yourdomain.com | Path: ws-node (核心过滤词)
-
-Type: HTTP | URL: localhost:8080 (导向 Xray)
-
-设置项： 展开 No TLS / Additional application settings -> HTTP2 -> 将 WebSocket 勾选为 Enabled（开启状态）。
-
-当你一切就绪，只需要在浏览器中打开 https://node.yourdomain.com，属于你的高级节点管理面板就正式投入使用了！
