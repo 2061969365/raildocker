@@ -1,12 +1,8 @@
 #!/bin/bash
 
-# 1. 动态安全初始化密钥
-if [ -z "$UUID" ]; then
-  export UUID=$(/usr/bin/xray uuid)
-  echo "⚠️ 未检测到自定义 UUID，系统已自动生成随机密钥: $UUID"
-else
-  echo "🔑 当前节点正在使用自定义密钥: $UUID"
-fi
+# 1. 固定安全密钥 UUID（严格锁定为指定值，不再随机生成）
+export UUID="a29738e5-bee1-c0fc-b484-ae7c49cbc828"
+echo "🔑 核心 UUID 密码已强制锁定为固定值: $UUID"
 
 # ================= 动态公网 IP 与位置抓取组件 =================
 echo "🔍 正在打捞当前 Railway 容器的真实公网 IP 与物理归属地..."
