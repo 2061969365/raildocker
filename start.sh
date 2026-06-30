@@ -10,7 +10,7 @@ fi
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/config.json
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/www/index.html
 
-busybox httpd -p 8081 -h /app/www &
+busybox httpd -f -p 8081 -h /app/www &
 echo "🌐 轻量静态网页后台已在本地 8081 端口拉起"
 
 /usr/bin/xray -config /app/config.json &
