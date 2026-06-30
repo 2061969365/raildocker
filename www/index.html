@@ -25,21 +25,6 @@
                 <span class="badge">安全防扫描激活</span>
             </div>
 
-            <div class="grid-2">
-                <div class="card">
-                    <div class="label">📊 容器计算资源监控</div>
-                    <div class="dash-item">CPU 使用率: <span id="cpuVal">0</span>%</div>
-                    <div class="progress-bar"><div id="cpuBar" class="progress-inner" style="width: 0%"></div></div>
-                    <div class="dash-item" style="margin-top:10px;">内存使用率: <span id="memVal">0</span>%</div>
-                    <div class="progress-bar"><div id="memBar" class="progress-inner" style="width: 0%"></div></div>
-                </div>
-                <div class="card">
-                    <div class="label">🚀 容器累计流量统计</div>
-                    <div class="dash-item" style="font-size: 15px; margin-top:12px;">📥 下载流量：<strong id="rxVal" style="color:#38bdf8;">0 MB</strong></div>
-                    <div class="dash-item" style="font-size: 15px; margin-top:15px;">📤 上传流量：<strong id="txVal" style="color:#34d399;">0 MB</strong></div>
-                </div>
-            </div>
-
             <div class="card">
                 <div class="label">⚡ 全网最新官方优选 IP 推荐 (全自动动态捞取)</div>
                 <div style="font-size:12px; color:#94a3b8; margin-bottom:10px;">点击下方优质物理加速点，可一键自动重组下方的节点链接：</div>
@@ -72,6 +57,7 @@
     <script>
         const uuid = "UUID_PLACEHOLDER";
         const wsPath = "/ws-node";
+        const nodeRemark = "NODE_REMARK_PLACEHOLDER";
         const currentHost = window.location.host;
 
         const urlParams = new URLSearchParams(window.location.search);
@@ -86,13 +72,8 @@
                 .header-area { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 15px; margin-bottom: 20px; }
                 h1 { font-size: 20px; color: #38bdf8; margin: 0; border: none; padding: 0; width: auto; }
                 .badge { background: #059669; color: white; font-size: 11px; padding: 4px 8px; border-radius: 99px; font-weight: bold; }
-                .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-                @media(max-width:600px){ .grid-2 { grid-template-columns: 1fr; } }
                 .card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 15px; margin-bottom: 15px; }
                 .label { font-weight: 600; font-size: 13px; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;}
-                .dash-item { font-size: 13px; color: #cbd5e1; }
-                .progress-bar { background: #334155; height: 6px; border-radius: 99px; margin-top: 6px; overflow: hidden; }
-                .progress-inner { background: #38bdf8; height: 100%; transition: width 0.5s; }
                 .value { font-family: monospace; font-size: 11px; word-break: break-all; background: #1e293b; padding: 10px; border-radius: 6px; border: 1px solid #475569; color: #cbd5e1; overflow-y: auto; margin-bottom: 10px;}
                 .input-group { display: flex; gap: 10px; }
                 input { flex: 1; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 8px; color: white; font-family: monospace; font-size: 13px; }
@@ -104,12 +85,11 @@
             `;
 
             generateLinks(currentHost);
-            initDashboard();
             fetchOptimizedIPs();
         }
 
         function generateLinks(connectAddress) {
-            const vlessLink = `vless://${uuid}@${connectAddress}:443?encryption=none&security=tls&type=ws&host=${currentHost}&sni=${currentHost}&path=${encodeURIComponent(wsPath)}#\uD83C\uDDF8\uD83C\uDDEC_SG_Premium_VLESS`;
+            const vlessLink = `vless://${uuid}@${connectAddress}:443?encryption=none&security=tls&type=ws&host=${currentHost}&sni=${currentHost}&path=${encodeURIComponent(wsPath)}#${nodeRemark}`;
             document.getElementById('nodeLink').innerText = vlessLink;
             document.getElementById('subContent').innerText = btoa(unescape(encodeURIComponent(vlessLink)));
         }
@@ -117,24 +97,7 @@
         function applyCustomIp() {
             const inputVal = document.getElementById('cfIpInput').value.trim();
             generateLinks(inputVal ? inputVal : currentHost);
-            alert(inputVal ? '已成功套用接入点: ' + inputVal : '已恢复默认隧道域名解析');
-        }
-
-        function initDashboard() {
-            const updateStats = () => {
-                fetch('/status.json?t=' + Date.now())
-                    .then(res => res.json())
-                    .then(data => {
-                        document.getElementById('cpuVal').innerText = data.cpu;
-                        document.getElementById('cpuBar').style.width = data.cpu + '%';
-                        document.getElementById('memVal').innerText = data.mem;
-                        document.getElementById('memBar').style.width = data.mem + '%';
-                        document.getElementById('rxVal').innerText = (data.rx / 1024 / 1024).toFixed(2) + ' MB';
-                        document.getElementById('txVal').innerText = (data.tx / 1024 / 1024).toFixed(2) + ' MB';
-                    }).catch(() => {});
-            };
-            updateStats();
-            setInterval(updateStats, 10000);
+            alert(inputVal ? `已成功套用接入点: ${inputVal}` : '已恢复默认隧道域名解析');
         }
 
         function fetchOptimizedIPs() {
@@ -152,7 +115,7 @@
                         span.onclick = () => {
                             document.getElementById('cfIpInput').value = ip;
                             generateLinks(ip);
-                            alert('✨ 已成功切换到该优选 IP: ' + ip);
+                            alert(`✨ 已成功切换到该优选 IP: ${ip}`);
                         };
                         poolDiv.appendChild(span);
                     });

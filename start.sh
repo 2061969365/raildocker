@@ -8,9 +8,22 @@ else
   echo "🔑 当前节点正在使用自定义密钥: $UUID"
 fi
 
-# 动态注入密钥到内核配置文件和前端页面
+# ================= 动态公网 IP 与位置抓取组件 =================
+echo "🔍 正在打捞当前 Railway 容器的真实公网 IP 与物理归属地..."
+REAL_IP=$(curl -s --max-time 3 ifconfig.me)
+REAL_COUNTRY=$(curl -s --max-time 3 ipinfo.io/country)
+
+if [ -z "$REAL_IP" ]; then REAL_IP="DynamicIP"; fi
+if [ -z "$REAL_COUNTRY" ]; then REAL_COUNTRY="Cloud"; fi
+
+NODE_REMARK="${REAL_COUNTRY}_${REAL_IP}"
+echo "📍 探测成功！当前容器真实出口位置: $NODE_REMARK"
+# =====================================================================
+
+# 动态注入密钥、以及动态节点名字到内核配置文件和前端页面
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/config.json
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/www/index.html
+sed -i "s/NODE_REMARK_PLACEHOLDER/$NODE_REMARK/g" /app/www/index.html
 
 # 2. 启动 Alpine 增强网页服务器（监听 8081 端口）
 httpd -p 8081 -h /app/www &
@@ -20,7 +33,7 @@ echo "🌐 静态网页后台已在本地 8081 端口拉起"
 /usr/bin/xray -config /app/config.json &
 echo "🚀 Xray 核心组件已在本地 8080 端口拉起"
 
-# 4. 验证并运行 Cloudflare Tunnel 隧道
+# 4. 运行 Cloudflare Tunnel 隧道
 if [ -z "$TUNNEL_TOKEN" ]; then
   echo "❌ 【错误】未检测到 TUNNEL_TOKEN 环境变量，隧道无法建立！"
   exit 1
@@ -29,31 +42,10 @@ fi
 echo "🚇 正在通过 QUIC (UDP) 协议向 Cloudflare 边缘网络建立加密大桥..."
 /usr/local/bin/cloudflared tunnel --protocol quic --no-autoupdate run --token "$TUNNEL_TOKEN" &
 
-# 5. 核心监控、系统硬核状态指标采集循环
+# 5. 纯净版双端口雷达监控循环（无计算负载，仅拦截死锁）
 while true; do
-  sleep 10
+  sleep 15
 
-  # --- 📊 仪表盘数据采集逻辑 ---
-  # 采集 CPU 占用率
-  IDLE=$(top -b -n 1 | grep "CPU:" | awk '{for(i=1;i<=NF;i++) if($i ~ /idle/) print $(i-1)}' | tr -d '%')
-  CPU_PCT=$((100 - IDLE))
-
-  # 采集内存占用率
-  MEM_TOTAL=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-  MEM_FREE=$(awk '/MemFree/ {print $2}' /proc/meminfo)
-  MEM_BUFFERS=$(awk '/Buffers/ {print $2}' /proc/meminfo)
-  MEM_CACHED=$(awk '/Cached/ {print $2}' /proc/meminfo)
-  MEM_USED=$((MEM_TOTAL - MEM_FREE - MEM_BUFFERS - MEM_CACHED))
-  MEM_PCT=$((MEM_USED * 100 / MEM_TOTAL))
-
-  # 采集累计消耗流量 (排除本地回环 lo)
-  RX_BYTES=$(awk '!/lo|face/ {rx+=$2} END {print rx}' /proc/net/dev)
-  TX_BYTES=$(awk '!/lo|face/ {tx+=$10} END {print tx}' /proc/net/dev)
-
-  # 生成轻量级实时状态 JSON 供前端读取
-  echo "{\"cpu\":$CPU_PCT,\"mem\":$MEM_PCT,\"rx\":$RX_BYTES,\"tx\":$TX_BYTES}" > /app/www/status.json
-
-  # --- 📡 双端口雷达监控逻辑 ---
   netstat -tln | grep -q :8080
   VLESS_PORT=$?
   netstat -tln | grep -q :8081
@@ -62,7 +54,7 @@ while true; do
   CF_PROCESS=$?
 
   if [ $VLESS_PORT -ne 0 ] || [ $HTTP_PORT -ne 0 ] || [ $CF_PROCESS -ne 0 ]; then
-    echo "🚨 【断流警报】检测到硬断流！(VLESS:$VLESS_PORT, 网页:$HTTP_PORT, 隧道:$CF_PROCESS)"
+    echo "🚨 【断流警报】检测到服务硬断流！(VLESS:$VLESS_PORT, 网页:$HTTP_PORT, 隧道:$CF_PROCESS)"
     exit 1
   fi
 done

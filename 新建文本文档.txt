@@ -1,58 +1,4 @@
-请用这套精简优化后的全套代码覆盖你的仓库：
-
-1. config.json（精简版：纯净单端口 VLESS）
-JSON
-{
-  "log": {
-    "loglevel": "warning"
-  },
-  "inbounds": [
-    {
-      "port": 8080,
-      "listen": "0.0.0.0",
-      "protocol": "vless",
-      "settings": {
-        "clients": [
-          {
-            "id": "UUID_PLACEHOLDER",
-            "level": 0
-          }
-        ],
-        "decryption": "none"
-      },
-      "streamSettings": {
-        "network": "ws",
-        "wsSettings": {
-          "path": "/ws-node"
-        }
-      }
-    }
-  ],
-  "outbounds": [
-    {
-      "protocol": "freedom",
-      "tag": "direct"
-    },
-    {
-      "protocol": "blackhole",
-      "tag": "block"
-    }
-  ],
-  "routing": {
-    "domainStrategy": "AsIs",
-    "rules": [
-      {
-        "type": "field",
-        "outboundTag": "block",
-        "protocol": [
-          "bittorrent"
-        ]
-      }
-    ]
-  }
-}
-2. start.sh（精简版：双端口雷达监控 + 状态采集）
-删除了 8082 端口，只留下网页（8081）和 VLESS（8080）的互锁监控。
+完全剔除了所有对内存、CPU和流量的计算，只保留核心启动、IP动态抓取和纯粹的端口存活守护：
 
 Bash
 #!/bin/bash
@@ -65,9 +11,22 @@ else
   echo "🔑 当前节点正在使用自定义密钥: $UUID"
 fi
 
-# 动态注入密钥到内核配置文件和前端页面
+# ================= 动态公网 IP 与位置抓取组件 =================
+echo "🔍 正在打捞当前 Railway 容器的真实公网 IP 与物理归属地..."
+REAL_IP=$(curl -s --max-time 3 ifconfig.me)
+REAL_COUNTRY=$(curl -s --max-time 3 ipinfo.io/country)
+
+if [ -z "$REAL_IP" ]; then REAL_IP="DynamicIP"; fi
+if [ -z "$REAL_COUNTRY" ]; then REAL_COUNTRY="Cloud"; fi
+
+NODE_REMARK="${REAL_COUNTRY}_${REAL_IP}"
+echo "📍 探测成功！当前容器真实出口位置: $NODE_REMARK"
+# =====================================================================
+
+# 动态注入密钥、以及动态节点名字到内核配置文件和前端页面
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/config.json
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/www/index.html
+sed -i "s/NODE_REMARK_PLACEHOLDER/$NODE_REMARK/g" /app/www/index.html
 
 # 2. 启动 Alpine 增强网页服务器（监听 8081 端口）
 httpd -p 8081 -h /app/www &
@@ -77,7 +36,7 @@ echo "🌐 静态网页后台已在本地 8081 端口拉起"
 /usr/bin/xray -config /app/config.json &
 echo "🚀 Xray 核心组件已在本地 8080 端口拉起"
 
-# 4. 验证并运行 Cloudflare Tunnel 隧道
+# 4. 运行 Cloudflare Tunnel 隧道
 if [ -z "$TUNNEL_TOKEN" ]; then
   echo "❌ 【错误】未检测到 TUNNEL_TOKEN 环境变量，隧道无法建立！"
   exit 1
@@ -86,31 +45,10 @@ fi
 echo "🚇 正在通过 QUIC (UDP) 协议向 Cloudflare 边缘网络建立加密大桥..."
 /usr/local/bin/cloudflared tunnel --protocol quic --no-autoupdate run --token "$TUNNEL_TOKEN" &
 
-# 5. 核心监控、系统硬核状态指标采集循环
+# 5. 纯净版双端口雷达监控循环（无计算负载，仅拦截死锁）
 while true; do
-  sleep 10
+  sleep 15
   
-  # --- 📊 仪表盘数据采集逻辑 ---
-  # 采集 CPU 占用率
-  IDLE=$(top -b -n 1 | grep "CPU:" | awk '{for(i=1;i<=NF;i++) if($i ~ /idle/) print $(i-1)}' | tr -d '%')
-  CPU_PCT=$((100 - IDLE))
-  
-  # 采集内存占用率
-  MEM_TOTAL=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
-  MEM_FREE=$(awk '/MemFree/ {print $2}' /proc/meminfo)
-  MEM_BUFFERS=$(awk '/Buffers/ {print $2}' /proc/meminfo)
-  MEM_CACHED=$(awk '/Cached/ {print $2}' /proc/meminfo)
-  MEM_USED=$((MEM_TOTAL - MEM_FREE - MEM_BUFFERS - MEM_CACHED))
-  MEM_PCT=$((MEM_USED * 100 / MEM_TOTAL))
-  
-  # 采集累计消耗流量 (排除本地回环 lo)
-  RX_BYTES=$(awk '!/lo|face/ {rx+=$2} END {print rx}' /proc/net/dev)
-  TX_BYTES=$(awk '!/lo|face/ {tx+=$10} END {print tx}' /proc/net/dev)
-  
-  # 生成轻量级实时状态 JSON 供前端读取
-  echo "{\"cpu\":$CPU_PCT,\"mem\":$MEM_PCT,\"rx\":$RX_BYTES,\"tx\":$TX_BYTES}" > /app/www/status.json
-  
-  # --- 📡 双端口雷达监控逻辑 ---
   netstat -tln | grep -q :8080
   VLESS_PORT=$?
   netstat -tln | grep -q :8081
@@ -119,12 +57,12 @@ while true; do
   CF_PROCESS=$?
   
   if [ $VLESS_PORT -ne 0 ] || [ $HTTP_PORT -ne 0 ] || [ $CF_PROCESS -ne 0 ]; then
-    echo "🚨 【断流警报】检测到硬断流！(VLESS:$VLESS_PORT, 网页:$HTTP_PORT, 隧道:$CF_PROCESS)"
+    echo "🚨 【断流警报】检测到服务硬断流！(VLESS:$VLESS_PORT, 网页:$HTTP_PORT, 隧道:$CF_PROCESS)"
     exit 1
   fi
 done
-3. www/index.html（精简完全体：404伪装 + 仪表盘 + 自动优选IP）
-移除了 Trojan 的排版，UI 变得更加紧凑洗练。暗号依旧锁定为你指定的固定单词 ?mirror。
+2. 🛠️ 洗练清爽版 www/index.html
+删除了顶部的仪表盘卡片和定时抓取数据的 JS 函数，UI 架构变得更加专注于节点管理和优选 IP 流：
 
 HTML
 <!DOCTYPE html>
@@ -152,21 +90,6 @@ HTML
             <div class="header-area">
                 <h1>🛸 边缘计算网关综合控制面板</h1>
                 <span class="badge">安全防扫描激活</span>
-            </div>
-
-            <div class="grid-2">
-                <div class="card">
-                    <div class="label">📊 容器计算资源监控</div>
-                    <div class="dash-item">CPU 使用率: <span id="cpuVal">0</span>%</div>
-                    <div class="progress-bar"><div id="cpuBar" class="progress-inner" style="width: 0%"></div></div>
-                    <div class="dash-item" style="margin-top:10px;">内存使用率: <span id="memVal">0</span>%</div>
-                    <div class="progress-bar"><div id="memBar" class="progress-inner" style="width: 0%"></div></div>
-                </div>
-                <div class="card">
-                    <div class="label">🚀 容器累计流量统计</div>
-                    <div class="dash-item" style="font-size: 15px; margin-top:12px;">📥 下载流量：<strong id="rxVal" style="color:#38bdf8;">0 MB</strong></div>
-                    <div class="dash-item" style="font-size: 15px; margin-top:15px;">📤 上传流量：<strong id="txVal" style="color:#34d399;">0 MB</strong></div>
-                </div>
             </div>
             
             <div class="card">
@@ -201,6 +124,7 @@ HTML
     <script>
         const uuid = "UUID_PLACEHOLDER"; 
         const wsPath = "/ws-node";
+        const nodeRemark = "NODE_REMARK_PLACEHOLDER"; 
         const currentHost = window.location.host; 
 
         // 🛡️ 变色龙暗号识别
@@ -216,13 +140,8 @@ HTML
                 .header-area { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #334155; padding-bottom: 15px; margin-bottom: 20px; }
                 h1 { font-size: 20px; color: #38bdf8; margin: 0; border: none; padding: 0; width: auto; }
                 .badge { background: #059669; color: white; font-size: 11px; padding: 4px 8px; border-radius: 99px; font-weight: bold; }
-                .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-                @media(max-width:600px){ .grid-2 { grid-template-columns: 1fr; } }
                 .card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; padding: 15px; margin-bottom: 15px; }
                 .label { font-weight: 600; font-size: 13px; color: #94a3b8; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.05em;}
-                .dash-item { font-size: 13px; color: #cbd5e1; }
-                .progress-bar { background: #334155; height: 6px; border-radius: 99px; margin-top: 6px; overflow: hidden; }
-                .progress-inner { background: #38bdf8; height: 100%; transition: width 0.5s; }
                 .value { font-family: monospace; font-size: 11px; word-break: break-all; background: #1e293b; padding: 10px; border-radius: 6px; border: 1px solid #475569; color: #cbd5e1; overflow-y: auto; margin-bottom: 10px;}
                 .input-group { display: flex; gap: 10px; }
                 input { flex: 1; background: #0f172a; border: 1px solid #475569; border-radius: 6px; padding: 8px; color: white; font-family: monospace; font-size: 13px; }
@@ -234,12 +153,11 @@ HTML
             `;
             
             generateLinks(currentHost);
-            initDashboard();
             fetchOptimizedIPs();
         }
 
         function generateLinks(connectAddress) {
-            const vlessLink = `vless://${uuid}@${connectAddress}:443?encryption=none&security=tls&type=ws&host=${currentHost}&sni=${currentHost}&path=${encodeURIComponent(wsPath)}#🇸🇬_SG_Premium_VLESS`;
+            const vlessLink = `vless://${uuid}@${connectAddress}:443?encryption=none&security=tls&type=ws&host=${currentHost}&sni=${currentHost}&path=${encodeURIComponent(wsPath)}#${nodeRemark}`;
             document.getElementById('nodeLink').innerText = vlessLink;
             document.getElementById('subContent').innerText = btoa(unescape(encodeURIComponent(vlessLink)));
         }
@@ -248,23 +166,6 @@ HTML
             const inputVal = document.getElementById('cfIpInput').value.trim();
             generateLinks(inputVal ? inputVal : currentHost);
             alert(inputVal ? `已成功套用接入点: ${inputVal}` : '已恢复默认隧道域名解析');
-        }
-
-        function initDashboard() {
-            const updateStats = () => {
-                fetch('/status.json?t=' + Date.now())
-                    .then(res => res.json())
-                    .then(data => {
-                        document.getElementById('cpuVal').innerText = data.cpu;
-                        document.getElementById('cpuBar').style.width = data.cpu + '%';
-                        document.getElementById('memVal').innerText = data.mem;
-                        document.getElementById('memBar').style.width = data.mem + '%';
-                        document.getElementById('rxVal').innerText = (data.rx / 1024 / 1024).toFixed(2) + ' MB';
-                        document.getElementById('txVal').innerText = (data.tx / 1024 / 1024).toFixed(2) + ' MB';
-                    }).catch(() => {});
-            };
-            updateStats();
-            setInterval(updateStats, 10000);
         }
 
         function fetchOptimizedIPs() {
