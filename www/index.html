@@ -77,11 +77,7 @@
 
         function copyText(elementId) {
             const text = document.getElementById(elementId).innerText;
-            navigator.clipboard.writeText(text).then(() => {
-                alert('已成功复制到剪贴板！');
-            }).catch(err => {
-                alert('复制失败，请手动选中文本复制。');
-            });
+            navigator.clipboard.writeText(text).then(() => alert('已成功复制到剪贴板！'));
         }
     </script>
 </body>

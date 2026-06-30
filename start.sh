@@ -12,8 +12,8 @@ fi
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/config.json
 sed -i "s/UUID_PLACEHOLDER/$UUID/g" /app/www/index.html
 
-# 2. 启动 Alpine 自带的 Busybox 网页服务器（让其自然后台化）
-busybox httpd -p 8081 -h /app/www &
+# 2. 启动 Alpine 增强包自带的网页服务器（监听 8081，移除本地 IP 锁死以增强 Docker 兼容性）
+httpd -p 8081 -h /app/www &
 echo "🌐 轻量静态网页后台已在本地 8081 端口拉起"
 
 # 3. 启动 Xray 核心组件
@@ -29,7 +29,7 @@ fi
 echo "🚇 正在通过 QUIC (UDP) 协议向 Cloudflare 边缘网络建立加密大桥..."
 /usr/local/bin/cloudflared tunnel --protocol quic --no-autoupdate run --token "$TUNNEL_TOKEN" &
 
-# 5. 高级端口与进程级真随时监控（用端口检查替代不稳定的PID名字检查，彻底断绝友军误伤）
+# 5. 高级端口与进程级多维监控（用 netstat 测网络回响，彻底断绝 PID 名字不一致导致的友军误伤）
 while true; do
   sleep 10
 
@@ -45,10 +45,10 @@ while true; do
   pidof cloudflared > /dev/null
   CF_PROCESS_STATUS=$?
 
-  # 只要有任何一个端口不响应或者隧道挂了，才真正触发自愈重启
+  # 只有当任何一个服务真正无法响应网络时，才拉响警报触发自愈
   if [ $XRAY_PORT_STATUS -ne 0 ] || [ $HTTPD_PORT_STATUS -ne 0 ] || [ $CF_PROCESS_STATUS -ne 0 ]; then
-    echo "🚨 【真实警报】检测到核心服务断流！(Xray端口:$XRAY_PORT_STATUS, 网页端口:$HTTPD_PORT_STATUS, 隧道进程:$CF_PROCESS_STATUS)"
-    echo "正在强制关闭容器以触发自动重启..."
+    echo "🚨 【真实警报】检测到服务硬断流！(Xray端口:$XRAY_PORT_STATUS, 网页端口:$HTTPD_PORT_STATUS, 隧道进程:$CF_PROCESS_STATUS)"
+    echo "正在强制关闭容器以触发 Railway 自动拉起新实例..."
     exit 1
   fi
 done
