@@ -26,13 +26,18 @@ echo "🚇 正在通过 QUIC (UDP) 协议向 Cloudflare 边缘网络建立加密
 
 while true; do
   sleep 10
-  pidof xray > /dev/null
-  XRAY_STATUS=$?
-  pidof cloudflared > /dev/null
-  CF_STATUS=$?
 
-  if [ $XRAY_STATUS -ne 0 ] || [ $CF_STATUS -ne 0 ]; then
-    echo "🚨 【警告】检测到内部核心进程异常崩溃！正在终止容器以触发 Railway 自动拉起新实例..."
+  pidof xray > /dev/null
+  XRAY_RUNNING=$?
+
+  pidof cloudflared > /dev/null
+  CF_RUNNING=$?
+
+  pidof httpd > /dev/null
+  HTTPD_RUNNING=$?
+
+  if [ $XRAY_RUNNING -ne 0 ] || [ $CF_RUNNING -ne 0 ] || [ $HTTPD_RUNNING -ne 0 ]; then
+    echo "🚨 【警告】检测到内部核心进程（Xray 或 Tunnel 或 网页服务器）异常崩溃！"
     exit 1
   fi
 done
